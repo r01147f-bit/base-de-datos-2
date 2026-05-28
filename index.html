@@ -1009,16 +1009,74 @@ var A = {
   mats:    {}        // key 'u1_w1' → [ {id,titulo,desc,fname,fsize,bytes,fecha,dataUrl} ]
 };
 
-/* Cargar localStorage */
+/* ═══════════════════════════════════════════
+   INDEXEDDB — almacenamiento permanente sin límite
+═══════════════════════════════════════════ */
+var IDB = null;
+
+function abrirIDB(){
+  return new Promise(function(resolve, reject){
+    var req = indexedDB.open('portafolio_bd2', 1);
+    req.onupgradeneeded = function(e){
+      var db = e.target.result;
+      if(!db.objectStoreNames.contains('materiales')){
+        db.createObjectStore('materiales', {keyPath:'id'});
+      }
+    };
+    req.onsuccess = function(e){ IDB = e.target.result; resolve(IDB); };
+    req.onerror   = function(e){ reject(e); };
+  });
+}
+
+function idbGuardar(item){
+  return new Promise(function(resolve, reject){
+    var tx = IDB.transaction('materiales','readwrite');
+    tx.objectStore('materiales').put(item);
+    tx.oncomplete = resolve;
+    tx.onerror    = reject;
+  });
+}
+
+function idbEliminar(id){
+  return new Promise(function(resolve, reject){
+    var tx = IDB.transaction('materiales','readwrite');
+    tx.objectStore('materiales').delete(id);
+    tx.oncomplete = resolve;
+    tx.onerror    = reject;
+  });
+}
+
+function idbCargarTodo(){
+  return new Promise(function(resolve, reject){
+    var tx  = IDB.transaction('materiales','readonly');
+    var req = tx.objectStore('materiales').getAll();
+    req.onsuccess = function(){ resolve(req.result||[]); };
+    req.onerror   = reject;
+  });
+}
+
+/* Cargar tema */
 (function(){
-  try { A.mats  = JSON.parse(localStorage.getItem('bd2_mats')||'{}'); }  catch(e){A.mats={};}
-  try { A.tema  = localStorage.getItem('bd2_tema')||'dark'; }            catch(e){}
+  try { A.tema = localStorage.getItem('bd2_tema')||'dark'; } catch(e){}
   aplicarTema();
 })();
 
-function guardarMats(){
-  try{ localStorage.setItem('bd2_mats', JSON.stringify(A.mats)); }catch(e){}
-}
+/* Iniciar IDB y cargar todos los materiales guardados */
+abrirIDB().then(function(){
+  return idbCargarTodo();
+}).then(function(items){
+  items.forEach(function(item){
+    var key = item.unidad+'_w'+item.semana;
+    if(!A.mats[key]) A.mats[key] = [];
+    A.mats[key].push(item);
+  });
+  /* Ordenar cada semana por fecha descendente */
+  Object.keys(A.mats).forEach(function(k){
+    A.mats[k].sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+  });
+}).catch(function(e){ console.warn('IDB error:', e); });
+
+function guardarMats(){ /* IDB maneja todo — no se usa localStorage para archivos */ }
 
 /* ═══════════════════════════════════════════
    NAVEGACIÓN — función principal
@@ -1182,12 +1240,23 @@ function construirContenido(key, items, numSemana){
     html += '</div>';
   }
 
-  /* Botón subir (solo admin) al fondo de la semana */
-  if(A.admin){
-    html += '<div class="warow">'
-          +'<button class="btnAd" onclick="abrirUpload('+numSemana+')">⬆ Subir a Semana '+numSemana+'</button>'
-          +'</div>';
-  }
+  /* Botón subir — visible para todos */
+  html += '<div class="warow" style="justify-content:flex-start">'
+        +'<button onclick="abrirUpload('+numSemana+')" style="'
+        +'display:inline-flex;align-items:center;gap:7px;'
+        +'padding:.52rem 1.25rem;'
+        +'background:transparent;'
+        +'color:#00e676;'
+        +'border:2px solid #00e676;'
+        +'border-radius:8px;'
+        +'font-family:var(--font);font-size:.87rem;font-weight:800;'
+        +'cursor:pointer;'
+        +'transition:background .15s,color .15s;'
+        +'"'
+        +' onmouseover="this.style.background=\'rgba(0,230,118,.12)\'"'
+        +' onmouseout="this.style.background=\'transparent\'"'
+        +'>📤 Subir trabajo de la semana '+numSemana+'</button>'
+        +'</div>';
 
   return html;
 }
@@ -1327,102 +1396,74 @@ async function guardarArchivo(){
   titulo=titulo.trim(); desc=desc.trim();
   if(!f||!titulo){ toast('Necesitas un título y un archivo.','terr'); return; }
 
-  // Verificar que hay sesión activa
-  var sesion = await db.auth.getSession();
-  if(!sesion.data.session){
-    toast('Debes estar logueado para subir archivos.','terr'); return;
-  }
-
   var btn=document.getElementById('savebtn');
-  btn.disabled=true; btn.textContent='⏳ Subiendo…';
+  btn.disabled=true; btn.textContent='⏳ Guardando…';
 
-  try{
-    // 1. Nombre de archivo seguro y ruta organizada
-    var nombreSeguro = f.name.normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-zA-Z0-9._-]/g,'_');
-    var ruta = A.unidad+'/semana'+A.semana+'/'+Date.now()+'_'+nombreSeguro;
+  var reader = new FileReader();
+  reader.onload = async function(ev){
+    try{
+      var key  = A.unidad+'_w'+A.semana;
+      var ahora = new Date();
+      var item = {
+        id:      genId(),
+        unidad:  A.unidad,
+        semana:  A.semana,
+        titulo:  titulo,
+        desc:    desc,
+        fname:   f.name,
+        fsize:   fmtB(f.size),
+        bytes:   f.size,
+        ts:      ahora.getTime(),
+        fecha:   ahora.toLocaleString('es-PE',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}),
+        dataUrl: ev.target.result
+      };
 
-    // 2. Subir a Supabase Storage con upsert:true para evitar conflictos
-    var upload = await db.storage.from('materiales').upload(ruta, f, {upsert:true});
+      /* Guardar en IndexedDB (permanente, sin límite de tamaño) */
+      await idbGuardar(item);
 
-    if(upload.error){
-      toast('Error al subir archivo: '+upload.error.message,'terr');
-      btn.disabled=false; btn.textContent='✓ Guardar Material'; return;
+      /* Actualizar estado en memoria */
+      if(!A.mats[key]) A.mats[key]=[];
+      A.mats[key].unshift(item);
+
+      cerrarUpload();
+      refrescarSemana(key);
+      actualizarBanner();
+      toast('"'+titulo+'" guardado en Semana '+A.semana+' ✓','tok');
+    } catch(err){
+      toast('Error al guardar: '+err.message,'terr');
     }
-
-    // 3. Obtener URL pública
-    var urlResult = db.storage.from('materiales').getPublicUrl(ruta);
-    var urlPublica = urlResult.data.publicUrl;
-
-    // 4. Guardar en tabla materiales
-    var insert = await db.from('materiales').insert({
-      unidad:         A.unidad,
-      semana:         A.semana,
-      titulo:         titulo,
-      descripcion:    desc || null,
-      nombre_archivo: f.name,
-      url_archivo:    urlPublica,
-      tamano_bytes:   f.size
-    });
-
-    if(insert.error){
-      toast('Error al guardar registro: '+insert.error.message,'terr');
-      btn.disabled=false; btn.textContent='✓ Guardar Material'; return;
-    }
-
-    // 5. Éxito — recargar semana
-    cerrarUpload();
-    await cargarSemana(A.unidad, A.semana);
-    actualizarBanner();
-    toast('"'+titulo+'" subido a Semana '+A.semana+' ✓','tok');
-
-  } catch(err){
-    toast('Error inesperado: '+err.message,'terr');
-  }
-
-  btn.disabled=false; btn.textContent='✓ Guardar Material';
+    btn.disabled=false; btn.textContent='✓ Guardar Material';
+  };
+  reader.onerror = function(){
+    toast('Error al leer el archivo.','terr');
+    btn.disabled=false; btn.textContent='✓ Guardar Material';
+  };
+  reader.readAsDataURL(f);
 }
-async function cargarSemana(unidad, numSem){
+function cargarSemana(unidad, numSem){
+  /* Los datos ya están en A.mats cargados desde IDB al inicio */
   var key = unidad+'_w'+numSem;
-  var res = await db.from('materiales')
-    .select('*')
-    .eq('unidad', unidad)
-    .eq('semana', numSem)
-    .order('created_at', {ascending: false});
-
-  if(res.error){ console.error(res.error); return; }
-
-  A.mats[key] = (res.data||[]).map(function(row){
-    return {
-      id:      row.id,
-      titulo:  row.titulo,
-      desc:    row.descripcion||'',
-      fname:   row.nombre_archivo,
-      fsize:   fmtB(row.tamano_bytes),
-      bytes:   row.tamano_bytes||0,
-      fecha:   new Date(row.created_at).toLocaleString('es-PE',{
-        day:'2-digit',month:'short',year:'numeric',
-        hour:'2-digit',minute:'2-digit'
-      }),
-      dataUrl: row.url_archivo
-    };
-  });
-
   refrescarSemana(key);
+  return Promise.resolve();
 }
 
-async function cargarTodasLasSemanas(unidad){
+function cargarTodasLasSemanas(unidad){
   for(var s=1;s<=4;s++){
-    await cargarSemana(unidad, s);
+    refrescarSemana(unidad+'_w'+s);
   }
   actualizarBanner();
+  return Promise.resolve();
 }
 async function eliminarMat(key, id){
-  var res = await db.from('materiales').delete().eq('id', id);
-  if(res.error){ toast('Error al eliminar.','terr'); return; }
-  if(A.mats[key]) A.mats[key] = A.mats[key].filter(function(m){ return m.id!==id; });
-  refrescarSemana(key);
-  actualizarBanner();
-  toast('Material eliminado.','tinf');
+  try{
+    await idbEliminar(id);
+    if(A.mats[key]) A.mats[key] = A.mats[key].filter(function(m){ return m.id!==id; });
+    refrescarSemana(key);
+    actualizarBanner();
+    toast('Material eliminado.','tinf');
+  } catch(err){
+    toast('Error al eliminar.','terr');
+  }
 }
 
 /* ═══════════════════════════════════════════
