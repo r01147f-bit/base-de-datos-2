@@ -947,6 +947,91 @@ body.light::before {
 /* ═══════════════════════════════════════════
    DATOS FIJOS DE UNIDADES Y SEMANAS
 ═══════════════════════════════════════════ */
+/* ─────────────────────────────────────────────────────────────────
+   CAMBIA ESTE VALOR por tu usuario de GitHub y nombre de repositorio
+   Ejemplo: si tu repo es  https://github.com/dilmer/portafolio-bd2
+   pon: GITHUB_USER = 'dilmer'  y  GITHUB_REPO = 'portafolio-bd2'
+───────────────────────────────────────────────────────────────── */
+var GITHUB_USER = 'r01147f-bit';   // ← CAMBIA ESTO
+var GITHUB_REPO = '';      // ← CAMBIA ESTO
+var GITHUB_BRANCH = 'main';       // rama (main o master)
+
+/* Construye la URL de descarga directa desde GitHub */
+function ghUrl(ruta){
+  return 'https://raw.githubusercontent.com/'+GITHUB_USER+'/'+GITHUB_REPO+'/'+GITHUB_BRANCH+'/trabajos/'+ruta;
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   TRABAJOS POR SEMANA — CARGA DESDE LA CARPETA /trabajos/ DE GITHUB
+   Para agregar un trabajo:
+     1. Sube el archivo PDF/DOCX a la carpeta correcta en GitHub
+     2. Agrega una línea aquí con el nombre del archivo
+   Estructura de carpetas en GitHub:
+     trabajos/
+       unidad1/semana1/
+       unidad1/semana2/
+       ...
+       unidad4/semana4/
+───────────────────────────────────────────────────────────────── */
+var TRABAJOS_GITHUB = {
+  u1:{
+    w1:[ /* Pon aquí los archivos de Unidad 1 · Semana 1 */
+      // {nombre:'Tarea_Conceptos_Basicos.pdf', titulo:'Tarea — Conceptos Básicos'},
+    ],
+    w2:[ /* Unidad 1 · Semana 2 */
+      // {nombre:'Practica_Modelo_Relacional.pdf', titulo:'Práctica — Modelo Relacional'},
+    ],
+    w3:[ /* Unidad 1 · Semana 3 */
+      // {nombre:'Trabajo_SQL_DDL.docx', titulo:'Trabajo — SQL DDL'},
+    ],
+    w4:[ /* Unidad 1 · Semana 4 */
+      // {nombre:'Tarea_SQL_DML.pdf', titulo:'Tarea — SQL DML'},
+    ]
+  },
+  u2:{
+    w1:[
+      // {nombre:'Trabajo_ER.pdf', titulo:'Trabajo — Modelo Entidad-Relación'},
+    ],
+    w2:[
+      // {nombre:'Conversion_ER_Tablas.pdf', titulo:'Conversión ER a Tablas'},
+    ],
+    w3:[
+      // {nombre:'Normalizacion_1FN_3FN.pdf', titulo:'Normalización 1FN–3FN'},
+    ],
+    w4:[
+      // {nombre:'BCNF_Integridad.pdf', titulo:'BCNF e Integridad'},
+    ]
+  },
+  u3:{
+    w1:[
+      // {nombre:'Joins_Subconsultas.pdf', titulo:'JOINs y Subconsultas'},
+    ],
+    w2:[
+      // {nombre:'Vistas_Funciones.pdf', titulo:'Vistas y Funciones'},
+    ],
+    w3:[
+      // {nombre:'Stored_Procedures.pdf', titulo:'Stored Procedures'},
+    ],
+    w4:[
+      // {nombre:'Indices_Optimizacion.pdf', titulo:'Índices y Optimización'},
+    ]
+  },
+  u4:{
+    w1:[
+      // {nombre:'Intro_NoSQL.pdf', titulo:'Introducción a NoSQL'},
+    ],
+    w2:[
+      // {nombre:'MongoDB_CRUD.pdf', titulo:'MongoDB CRUD'},
+    ],
+    w3:[
+      // {nombre:'Redis_Practica.pdf', titulo:'Redis — Práctica'},
+    ],
+    w4:[
+      // {nombre:'SQL_vs_NoSQL.pdf', titulo:'SQL vs NoSQL — Comparativa'},
+    ]
+  }
+};
+
 var UNIDADES = {
   u1:{
     romano:'I', color:'#7c4dff',
@@ -1209,11 +1294,47 @@ function renderSemanas(){
 function construirContenido(key, items, numSemana){
   var html = '';
 
-  /* Lista de materiales (o estado vacío) */
-  if(items.length===0){
+  /* ── TRABAJOS DE GITHUB (estáticos) ── */
+  var partes = key.split('_w');                  // ['u1','1']
+  var uKey   = partes[0];                        // 'u1'
+  var wKey   = 'w'+partes[1];                    // 'w1'
+  var carpeta= 'unidad'+uKey.slice(1)+'/semana'+partes[1]+'/';
+  var ghItems = (TRABAJOS_GITHUB[uKey] && TRABAJOS_GITHUB[uKey][wKey]) ? TRABAJOS_GITHUB[uKey][wKey] : [];
+
+  if(ghItems.length>0){
+    html += '<div style="margin-bottom:.6rem;font-size:.72rem;font-weight:800;color:#7986cb;'
+          + 'text-transform:uppercase;letter-spacing:.06em;">📁 Mis Trabajos (GitHub)</div>';
+    html += '<div class="mlist">';
+    for(var g=0;g<ghItems.length;g++){
+      var gh = ghItems[g];
+      var urlGh = ghUrl(carpeta+gh.nombre);
+      html +=
+        '<div class="mc" style="border-color:rgba(121,134,203,.25)">'
+          +'<span class="mico">'+icoExt(gh.nombre)+'</span>'
+          +'<div class="mif">'
+            +'<span class="mt">'+esc(gh.titulo||gh.nombre)+'</span>'
+            +'<span class="mm">'+esc(gh.nombre)+' &nbsp;·&nbsp; GitHub</span>'
+          +'</div>'
+          +'<div class="macts">'
+            +'<a class="dlb" href="'+urlGh+'" target="_blank" download="'+esc(gh.nombre)+'">⬇ Descargar</a>'
+          +'</div>'
+        +'</div>';
+    }
+    html += '</div>';
+    if(items.length>0){
+      html += '<div style="border-top:1px dashed rgba(255,255,255,.1);margin:.75rem 0"></div>';
+    }
+  }
+
+  /* ── MATERIALES SUBIDOS LOCALMENTE (IndexedDB) ── */
+  if(ghItems.length===0 && items.length===0){
     html += '<div class="wempty"><span>📂</span>'
           + '<span>No hay materiales disponibles en esta semana.</span></div>';
-  } else {
+  } else if(items.length>0){
+    if(ghItems.length>0){
+      html += '<div style="margin-bottom:.6rem;font-size:.72rem;font-weight:800;color:#4db6ac;'
+            + 'text-transform:uppercase;letter-spacing:.06em;">📤 Material Adicional (subido)</div>';
+    }
     html += '<div class="mlist">';
     for(var i=0;i<items.length;i++){
       var it = items[i];
@@ -1750,3 +1871,4 @@ window.onload = () => {
 </script>
 </body>
 </html>
+
